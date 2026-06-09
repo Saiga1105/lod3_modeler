@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lod3-modeler"
+version = "0.1.0"
+description = "LoD3 building model enrichment tools and notebooks."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "laspy",
+    "matplotlib",
+    "numpy",
+    "open3d",
+    "opencv-python",
+    "pillow",
+    "scipy",
+    "shapely",
+    "torch",
+    "transformers",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipykernel",
+    "jupyter",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

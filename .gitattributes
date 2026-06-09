@@ -1,0 +1,8 @@
+*.ipynb diff=ipynb
+*.pdf binary
+*.las binary
+*.laz binary
+*.gpkg binary
+*.bin binary
+*.obj binary
+*.mtl binary
