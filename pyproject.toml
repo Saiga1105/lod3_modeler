@@ -15,6 +15,8 @@ dependencies = [
     "open3d",
     "opencv-python",
     "pillow",
+    "pyproj",
+    "pyshp",
     "scipy",
     "shapely",
     "torch",

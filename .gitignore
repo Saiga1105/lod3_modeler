@@ -26,6 +26,7 @@ dist/
 .DS_Store
 Thumbs.db
 desktop.ini
+~$*
 .vscode/
 .idea/
 
@@ -38,6 +39,8 @@ data/output/*
 # Large local reference material
 /context/
 docs/context/*.pdf
+docs/context/*.ppt
+docs/context/*.pptx
 
 # Geospatial/model/binary artifacts
 *.las
