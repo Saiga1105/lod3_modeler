@@ -30,6 +30,74 @@ def load_image(image_path):
 def load_json(json_path):
     with open(json_path) as f:
         return json.load(f)
+
+
+def raycast_rays(mesh, rays):
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh))
+    rays = np.asarray(rays, dtype=np.float32)
+    hits = scene.cast_rays(o3d.core.Tensor(rays))["t_hit"].numpy()
+    points = rays[:, :3] + rays[:, 3:] * hits[:, None]
+    points[~np.isfinite(hits)] = np.nan
+    return points
+
+
+def valid_quad(points, max_plane_error=0.25):
+    points = np.asarray(points, dtype=float)
+    if points.shape != (4, 3) or not np.isfinite(points).all():
+        return False
+    normal = np.cross(points[1] - points[0], points[2] - points[0])
+    normal_length = np.linalg.norm(normal)
+    if normal_length == 0:
+        return False
+    return abs(np.dot(points[3] - points[0], normal / normal_length)) <= max_plane_error
+
+
+def group_quads(points, threshold=0.4):
+    groups = []
+    for index, quad in enumerate(points):
+        quad = np.asarray(quad, dtype=float)
+        for group in groups:
+            if np.linalg.norm(np.asarray(points[group[0]]) - quad, axis=1).max() <= threshold:
+                group.append(index)
+                break
+        else:
+            groups.append([index])
+    return groups
+
+
+def mean_quads(points, labels, groups):
+    quads = []
+    for index, group in enumerate(groups, start=1):
+        group_labels = [labels[i] for i in group]
+        label = Counter(group_labels).most_common(1)[0][0]
+        mean_points = np.mean([points[i] for i in group], axis=0)
+        quads.append({"id": index, "label": label, "points": mean_points, "count": len(group)})
+    return quads
+
+
+def quads_to_linesets(quads, color=(1, 0, 0)):
+    geometries = []
+    for quad in quads:
+        line_set = o3d.geometry.LineSet()
+        line_set.points = o3d.utility.Vector3dVector(np.asarray(quad["points"], dtype=float))
+        line_set.lines = o3d.utility.Vector2iVector([[0, 1], [1, 3], [3, 2], [2, 0]])
+        line_set.paint_uniform_color(color)
+        geometries.append(line_set)
+    return geometries
+
+
+def quads_to_meshes(quads):
+    geometries = []
+    colors = {"window": [0.1, 0.4, 1.0], "door": [0.6, 0.25, 0.05]}
+    for quad in quads:
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(np.asarray(quad["points"], dtype=float))
+        mesh.triangles = o3d.utility.Vector3iVector([[0, 1, 3], [0, 3, 2]])
+        mesh.paint_uniform_color(colors.get(str(quad["label"]).lower(), [1.0, 0.0, 0.0]))
+        mesh.compute_vertex_normals()
+        geometries.append(mesh)
+    return geometries
     
 def load_lidar_data(las_path):
     las = laspy.read(las_path)
@@ -194,31 +262,57 @@ def visualize_camera_axes(camera_data, mesh=None, point_cloud=None, axis_size=3.
 #     return detection_results
 
 #nieuwe voor balcons
-def detect_objects(image_folder, model, processor, device, extension, box_th=0.4, text_th=0.2, text="window. door. balcony"):
+def detect_objects(images, model, processor, device, box_th=0.4, text_th=0.2, text="window. door. balcony", image_ids=None):
+    """
+    Detect objects in in-memory images.
+
+    Parameters
+    ----------
+    images : dict or iterable
+        Either {image_id: image_resource} or an iterable of image resources.
+        Image resources can be PIL Images, numpy arrays, or Open3D/GEOMAPI image
+        resources that PIL can receive through Image.fromarray.
+    image_ids : iterable, optional
+        Image ids to use when ``images`` is not a dict.
+    """
     detection_results = {}
- 
-    # Loop door alle bestanden in de opgegeven map en filter op bestandsextentie
-    for file_name in os.listdir(image_folder):
-        if file_name.endswith(extension):
-            img_id = os.path.splitext(file_name)[0]
-            pano_path = image_folder / file_name
- 
-            if pano_path.exists():
-                image = Image.open(pano_path)
-                inputs = processor(images=image, text=text, return_tensors="pt").to(device)
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                results = processor.post_process_grounded_object_detection(
-                    outputs,
-                    inputs.input_ids,
-                    threshold=box_th,
-                    text_threshold=text_th,
-                    target_sizes=[image.size[::-1]]
-                )
-                detection_results[img_id] = results
-                #print(f"Resultaten voor {img_id}: {results}")
-            else:
-                print(f"Afbeelding niet gevonden: {pano_path}")
+
+    if isinstance(images, dict):
+        image_items = images.items()
+    else:
+        if image_ids is not None:
+            image_items = zip(image_ids, images)
+        else:
+            def _items_from_iterable():
+                for index, image in enumerate(images):
+                    if isinstance(image, tuple) and len(image) == 2:
+                        yield image
+                    else:
+                        yield str(index), image
+            image_items = _items_from_iterable()
+
+    for img_id, image_resource in image_items:
+        if image_resource is None:
+            print(f"Afbeelding ontbreekt voor {img_id}")
+            continue
+
+        if isinstance(image_resource, Image.Image):
+            image = image_resource
+        else:
+            image = Image.fromarray(np.asarray(image_resource))
+
+        inputs = processor(images=image, text=text, return_tensors="pt").to(device)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        results = processor.post_process_grounded_object_detection(
+            outputs,
+            inputs.input_ids,
+            threshold=box_th,
+            text_threshold=text_th,
+            target_sizes=[image.size[::-1]]
+        )
+        detection_results[str(img_id)] = results
+        #print(f"Resultaten voor {img_id}: {results}")
     
     return detection_results
 
@@ -2429,7 +2523,6 @@ def add_windows_doors(cityjson_data, detection_data, inset_distance=100, lod_sou
         )
  
     # Face map om te bepalen bij welk CityObject elke detectie hoort
-    from functions_enrichment import extract_all_lod2_boundaries, add_semantic_value
     _, face_map = extract_all_lod2_boundaries(cityjson_data, lod_source)
  
     raw_verts = cityjson_data["vertices"]
